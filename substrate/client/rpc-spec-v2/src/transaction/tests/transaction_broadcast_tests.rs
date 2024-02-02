@@ -24,12 +24,23 @@ use sc_transaction_pool_api::{ChainEvent, MaintainedTransactionPool, Transaction
 use std::time::Duration;
 use substrate_test_runtime_client::AccountKeyring::*;
 use substrate_test_runtime_transaction_pool::uxt;
+use tokio::sync::mpsc;
 
 use super::utils::*;
 
+/// Get the next event from the provided middleware in at most 60 seconds.
+macro_rules! get_next_event {
+	($middleware:expr) => {
+		tokio::time::timeout(std::time::Duration::from_secs(60), $middleware.recv())
+			.await
+			.unwrap()
+			.unwrap()
+	};
+}
+
 #[tokio::test]
 async fn tx_broadcast_enters_pool() {
-	let (api, pool, client_mock, tx_api) = setup_api();
+	let (api, pool, client_mock, tx_api, mut middleware) = setup_api();
 
 	// Start at block 1.
 	let block_1_header = api.push_block(1, vec![], true);
@@ -44,14 +55,15 @@ async fn tx_broadcast_enters_pool() {
 	client_mock.trigger_import_stream(block_1_header).await;
 
 	// Ensure the tx propagated from `transaction_unstable_broadcast` to the transaction pool.
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(
+		event,
+		MiddlewareEvent::TransactionStatus {
+			id: operation_id.clone(),
+			status: TxStatusTypeTest::Ready
+		}
+	);
 
-	// TODO: Improve testability by extending the `transaction_unstable_broadcast` with
-	// a middleware trait that intercepts the transaction status for testing.
-	let mut num_retries = 12;
-	while num_retries > 0 && pool.status().ready != 1 {
-		tokio::time::sleep(Duration::from_secs(5)).await;
-		num_retries -= 1;
-	}
 	assert_eq!(1, pool.status().ready);
 	assert_eq!(uxt.encode().len(), pool.status().ready_bytes);
 
@@ -65,6 +77,15 @@ async fn tx_broadcast_enters_pool() {
 
 	assert_eq!(0, pool.status().ready);
 
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(
+		event,
+		MiddlewareEvent::TransactionStatus {
+			id: operation_id.clone(),
+			status: TxStatusTypeTest::InBlock((block_2, 0))
+		}
+	);
+
 	// Stop call can still be made.
 	let _: () = tx_api
 		.call("transaction_unstable_stop", rpc_params![&operation_id])
@@ -74,7 +95,7 @@ async fn tx_broadcast_enters_pool() {
 
 #[tokio::test]
 async fn tx_broadcast_invalid_tx() {
-	let (_, pool, _, tx_api) = setup_api();
+	let (_, pool, _, tx_api, recv) = setup_api();
 
 	// Invalid parameters.
 	let err = tx_api
@@ -103,7 +124,7 @@ async fn tx_broadcast_invalid_tx() {
 
 #[tokio::test]
 async fn tx_invalid_stop() {
-	let (_, _, _, tx_api) = setup_api();
+	let (_, _, _, tx_api, _) = setup_api();
 
 	// Make an invalid stop call.
 	let err = tx_api

@@ -16,16 +16,98 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use super::setup::Block;
-use crate::transaction::TransactionBroadcastMiddleware;
-use futures::channel::mpsc;
+use super::{
+	middleware::{MiddlewareEvent, TransactionMiddlware},
+	setup::Block,
+};
+use crate::{
+	chain_head::test_utils::ChainHeadMockClient,
+	transaction::{
+		TransactionBroadcast as RpcTransactionBroadcast, TransactionBroadcastMiddleware, *,
+	},
+};
+use futures::{channel::mpsc, Future};
+use jsonrpsee::RpcModule;
+use sc_transaction_pool::{BasicPool, *};
 use sc_transaction_pool_api::error::Error as PoolError;
-use sp_core::H256;
+use sp_core::{testing::TaskExecutor, H256};
 use sp_runtime::traits::Block as BlockT;
+use std::{pin::Pin, sync::Arc};
+use substrate_test_runtime_client::{prelude::*, Client};
+use substrate_test_runtime_transaction_pool::TestApi;
+
+pub type Block = substrate_test_runtime_client::runtime::Block;
+
+pub type TxTestPool = BasicPool<TestApi, Block>;
+pub type TxStatusType<Pool> = sc_transaction_pool_api::TransactionStatus<
+	sc_transaction_pool_api::TxHash<Pool>,
+	sc_transaction_pool_api::BlockHash<Pool>,
+>;
+pub type TxStatusTypeTest = TxStatusType<TxTestPool>;
+
+/// Initial Alice account nonce.
+pub const ALICE_NONCE: u64 = 209;
+
+pub fn create_basic_pool_with_genesis(
+	test_api: Arc<TestApi>,
+) -> (BasicPool<TestApi, Block>, Pin<Box<dyn Future<Output = ()> + Send>>) {
+	let genesis_hash = {
+		test_api
+			.chain()
+			.read()
+			.block_by_number
+			.get(&0)
+			.map(|blocks| blocks[0].0.header.hash())
+			.expect("there is block 0. qed")
+	};
+	BasicPool::new_test(test_api, genesis_hash, genesis_hash)
+}
+
+pub fn maintained_pool() -> (BasicPool<TestApi, Block>, Arc<TestApi>, futures::executor::ThreadPool)
+{
+	let api = Arc::new(TestApi::with_alice_nonce(ALICE_NONCE));
+	let (pool, background_task) = create_basic_pool_with_genesis(api.clone());
+
+	let thread_pool = futures::executor::ThreadPool::new().unwrap();
+	thread_pool.spawn_ok(background_task);
+	(pool, api, thread_pool)
+}
+
+pub fn setup_api() -> (
+	Arc<TestApi>,
+	Arc<BasicPool<TestApi, Block>>,
+	Arc<ChainHeadMockClient<Client<Backend>>>,
+	RpcModule<
+		TransactionBroadcast<
+			BasicPool<TestApi, Block>,
+			ChainHeadMockClient<Client<Backend>>,
+			TransactionMiddlware,
+		>,
+	>,
+	mpsc::UnboundedReceiver<MiddlewareEvent>,
+) {
+	let (pool, api, _) = maintained_pool();
+	let pool = Arc::new(pool);
+
+	let builder = TestClientBuilder::new();
+	let client = Arc::new(builder.build());
+	let client_mock = Arc::new(ChainHeadMockClient::new(client.clone()));
+	let (middleware, recv) = TransactionMiddlware::new();
+
+	let tx_api = RpcTransactionBroadcast::with_middleware(
+		client_mock.clone(),
+		pool.clone(),
+		Arc::new(TaskExecutor::default()),
+		middleware,
+	)
+	.into_rpc();
+
+	(api, pool, client_mock, tx_api, recv)
+}
 
 /// The type of the event that the middleware captures.
 #[derive(Debug, PartialEq)]
-enum MiddlewareEvent {
+pub enum MiddlewareEvent {
 	TransactionStatus {
 		id: String,
 		status: sc_transaction_pool_api::TransactionStatus<
@@ -46,7 +128,7 @@ enum MiddlewareEvent {
 /// A middleware that captures the callback events and provides
 /// them back to the testing code.
 #[derive(Clone)]
-struct TransactionMiddlware {
+pub struct TransactionMiddlware {
 	/// Send the middleware events to the test.
 	send: mpsc::UnboundedSender<MiddlewareEvent>,
 }
