@@ -21,11 +21,11 @@ use crate::{hex_string, transaction};
 use assert_matches::assert_matches;
 use codec::Encode;
 use jsonrpsee::{core::error::Error, rpc_params};
+use sc_transaction_pool::{Options, PoolLimit};
 use sc_transaction_pool_api::{ChainEvent, MaintainedTransactionPool, TransactionPool};
 use std::{collections::HashMap, sync::Arc};
 use substrate_test_runtime_client::AccountKeyring::*;
 use substrate_test_runtime_transaction_pool::uxt;
-use tokio::sync::mpsc;
 
 /// Get the next event from the provided middleware in at most 60 seconds.
 macro_rules! get_next_event {
@@ -73,7 +73,7 @@ macro_rules! collect_n_exit_events {
 
 #[tokio::test]
 async fn tx_broadcast_enters_pool() {
-	let (api, pool, client_mock, tx_api, mut middleware) = setup_api();
+	let (api, pool, client_mock, tx_api, mut middleware) = setup_api(Default::default());
 
 	// Start at block 1.
 	let block_1_header = api.push_block(1, vec![], true);
@@ -137,7 +137,7 @@ async fn tx_broadcast_stop_finished_broadcast() {
 	// However the last block is announced as finalized to force the
 	// broadcast future to exit before the `stop` is called.
 
-	let (api, pool, client_mock, tx_api, mut middleware) = setup_api();
+	let (api, pool, client_mock, tx_api, mut middleware) = setup_api(Default::default());
 
 	// Start at block 1.
 	let block_1_header = api.push_block(1, vec![], true);
@@ -205,7 +205,7 @@ async fn tx_broadcast_stop_finished_broadcast() {
 
 #[tokio::test]
 async fn tx_broadcast_invalid_tx() {
-	let (_, pool, _, tx_api, recv) = setup_api();
+	let (_, pool, _, tx_api, _) = setup_api(Default::default());
 
 	// Invalid parameters.
 	let err = tx_api
@@ -234,7 +234,7 @@ async fn tx_broadcast_invalid_tx() {
 
 #[tokio::test]
 async fn tx_invalid_stop() {
-	let (_, _, _, tx_api, _) = setup_api();
+	let (_, _, _, tx_api, _) = setup_api(Default::default());
 
 	// Make an invalid stop call.
 	let err = tx_api
@@ -248,7 +248,7 @@ async fn tx_invalid_stop() {
 
 #[tokio::test]
 async fn tx_broadcast_resubmits_future_nonce_tx() {
-	let (api, pool, client_mock, tx_api, mut middleware) = setup_api();
+	let (api, pool, client_mock, tx_api, mut middleware) = setup_api(Default::default());
 
 	// Start at block 1.
 	let block_1_header = api.push_block(1, vec![], true);
@@ -328,6 +328,121 @@ async fn tx_broadcast_resubmits_future_nonce_tx() {
 	);
 
 	let events = collect_n_exit_events!(&mut middleware, 2);
-	assert_eq!(events.get(&operation_id).unwrap(), false);
-	assert_eq!(events.get(&future_operation_id).unwrap(), false);
+	assert_eq!(events.get(&operation_id).unwrap(), &false);
+	assert_eq!(events.get(&future_operation_id).unwrap(), &false);
+}
+
+#[tokio::test]
+async fn tx_broadcast_resubmits_invalid_tx() {
+	let limits = PoolLimit { count: 8192, total_bytes: 20 * 1024 * 1024 };
+	let options = Options {
+		ready: limits.clone(),
+		future: limits,
+		reject_future_transactions: false,
+		// This ensures that a transaction is not banned.
+		ban_time: std::time::Duration::ZERO,
+	};
+
+	let (api, pool, client_mock, tx_api, mut middleware) = setup_api(options);
+
+	let uxt = uxt(Alice, ALICE_NONCE);
+	let xt = hex_string(&uxt.encode());
+	let operation_id: String =
+		tx_api.call("transaction_unstable_broadcast", rpc_params![&xt]).await.unwrap();
+
+	let block_1_header = api.push_block(1, vec![], true);
+	let block_1 = block_1_header.hash();
+	// Announce block 1 to `transaction_unstable_broadcast`.
+	client_mock.trigger_import_stream(block_1_header).await;
+
+	// Ensure the tx propagated from `transaction_unstable_broadcast` to the transaction pool.
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(
+		event,
+		MiddlewareEvent::TransactionStatus {
+			id: operation_id.clone(),
+			status: TxStatusTypeTest::Ready,
+		}
+	);
+	assert_eq!(1, pool.status().ready);
+	assert_eq!(uxt.encode().len(), pool.status().ready_bytes);
+
+	// Mark the transaction as invalid from the API, causing a temporary ban.
+	api.add_invalid(&uxt);
+
+	// Push an event to the pool to ensure the transaction is excluded.
+	let event = ChainEvent::NewBestBlock { hash: block_1, tree_route: None };
+	pool.maintain(event).await;
+	assert_eq!(1, pool.status().ready);
+
+	// Ensure the `transaction_unstable_broadcast` is aware of the invalid transaction.
+	let event = get_next_event!(&mut middleware);
+	// Because we have received an `Invalid` status, we try to broadcast the transaction with the
+	// next announced block.
+	assert_eq!(
+		event,
+		MiddlewareEvent::TransactionStatus {
+			id: operation_id.clone(),
+			status: TxStatusTypeTest::Invalid
+		}
+	);
+
+	// Import block 2.
+	let block_2_header = api.push_block(2, vec![], true);
+	client_mock.trigger_import_stream(block_2_header).await;
+
+	// Ensure we propagate the temporary ban error to `submit_and_watch`.
+	// This ensures we'll loop again with the next annmounced block and try to resubmit the
+	// transaction. The transaction remains temporarily banned until the pool is maintained.
+	let event = get_next_event!(&mut middleware);
+	assert_matches!(event, MiddlewareEvent::PoolError { id, err } if id == operation_id && err.contains("Transaction temporarily Banned"));
+
+	// Import block 3.
+	let block_3_header = api.push_block(3, vec![], true);
+	let block_3 = block_3_header.hash();
+	// Remove the invalid transaction from the pool to allow it to pass through.
+	api.remove_invalid(&uxt);
+	let event = ChainEvent::NewBestBlock { hash: block_3, tree_route: None };
+	// We have to maintain the pool to ensure the transaction is no longer invalid.
+	// This clears out the banned transactions.
+	pool.maintain(event).await;
+	assert_eq!(0, pool.status().ready);
+
+	// Announce block to `transaction_unstable_broadcast`.
+	client_mock.trigger_import_stream(block_3_header).await;
+
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(
+		event,
+		MiddlewareEvent::TransactionStatus {
+			id: operation_id.clone(),
+			status: TxStatusTypeTest::Ready,
+		}
+	);
+	assert_eq!(1, pool.status().ready);
+
+	let block_4_header = api.push_block(4, vec![uxt], true);
+	let block_4 = block_4_header.hash();
+	let event = ChainEvent::Finalized { hash: block_4, tree_route: Arc::from(vec![]) };
+	pool.maintain(event).await;
+
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(
+		event,
+		MiddlewareEvent::TransactionStatus {
+			id: operation_id.clone(),
+			status: TxStatusTypeTest::InBlock((block_4, 0)),
+		}
+	);
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(
+		event,
+		MiddlewareEvent::TransactionStatus {
+			id: operation_id.clone(),
+			status: TxStatusTypeTest::Finalized((block_4, 0)),
+		}
+	);
+	// At this point the broadcast future has exited.
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(event, MiddlewareEvent::Exit { id: operation_id.clone(), is_aborted: false });
 }
