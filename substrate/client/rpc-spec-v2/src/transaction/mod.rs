@@ -40,4 +40,4 @@ pub use event::{
 	TransactionEvent,
 };
 pub use transaction::Transaction;
-pub use transaction_broadcast::TransactionBroadcast;
+pub use transaction_broadcast::{TransactionBroadcast, TransactionBroadcastMiddleware};
