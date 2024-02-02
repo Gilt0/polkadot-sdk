@@ -28,7 +28,7 @@ use rand::{distributions::Alphanumeric, Rng};
 use sc_client_api::BlockchainEvents;
 use sc_transaction_pool_api::{
 	error::{Error as PoolError, IntoPoolError},
-	BlockHash, TransactionFor, TransactionPool, TransactionSource, TransactionStatus,
+	BlockHash, TransactionFor, TransactionPool, TransactionSource, TransactionStatus, TxHash,
 };
 use sp_blockchain::HeaderBackend;
 use sp_core::Bytes;
@@ -38,7 +38,7 @@ use std::{collections::HashMap, sync::Arc};
 use super::error::ErrorBroadcast;
 
 /// An API for transaction RPC calls.
-pub struct TransactionBroadcast<Pool, Client> {
+pub struct TransactionBroadcast<Pool, Client, Middleware = ()> {
 	/// Substrate client.
 	client: Arc<Client>,
 	/// Transactions pool.
@@ -47,6 +47,10 @@ pub struct TransactionBroadcast<Pool, Client> {
 	executor: SubscriptionTaskExecutor,
 	/// The brodcast operation IDs.
 	broadcast_ids: Arc<RwLock<HashMap<String, BroadcastState>>>,
+	/// Middleware for intercepting the transaction status.
+	///
+	/// `()` is a zero-cost abstraction for production.
+	middleware: Option<Arc<Middleware>>,
 }
 
 /// The state of a broadcast operation.
@@ -55,10 +59,37 @@ struct BroadcastState {
 	handle: AbortHandle,
 }
 
-impl<Pool, Client> TransactionBroadcast<Pool, Client> {
+impl<Pool, Client, Middleware> TransactionBroadcast<Pool, Client, Middleware> {
 	/// Creates a new [`TransactionBroadcast`].
 	pub fn new(client: Arc<Client>, pool: Arc<Pool>, executor: SubscriptionTaskExecutor) -> Self {
-		TransactionBroadcast { client, pool, executor, broadcast_ids: Default::default() }
+		TransactionBroadcast {
+			client,
+			pool,
+			executor,
+			broadcast_ids: Default::default(),
+			middleware: None,
+		}
+	}
+
+	/// Creates a new [`TransactionBroadcast`] with a middleware.
+	///
+	/// # Warning
+	///
+	/// Use [`TransactionBroadcast::new`]` if you don't need a middleware.
+	/// Currently used for testing.
+	pub fn with_middleware(
+		client: Arc<Client>,
+		pool: Arc<Pool>,
+		executor: SubscriptionTaskExecutor,
+		middleware: Middleware,
+	) -> Self {
+		TransactionBroadcast {
+			client,
+			pool,
+			executor,
+			broadcast_ids: Default::default(),
+			middleware: Some(Arc::new(middleware)),
+		}
 	}
 
 	/// Generate an unique operation ID for the `transaction_broadcast` RPC method.
@@ -94,14 +125,18 @@ impl<Pool, Client> TransactionBroadcast<Pool, Client> {
 const TX_SOURCE: TransactionSource = TransactionSource::External;
 
 #[async_trait]
-impl<Pool, Client> TransactionBroadcastApiServer<BlockHash<Pool>>
-	for TransactionBroadcast<Pool, Client>
+impl<Pool, Client, Middleware> TransactionBroadcastApiServer<BlockHash<Pool>>
+	for TransactionBroadcast<Pool, Client, Middleware>
 where
 	Pool: TransactionPool + Sync + Send + 'static,
 	Pool::Error: IntoPoolError,
 	Pool::Hash: Unpin,
 	<Pool::Block as BlockT>::Hash: Unpin,
 	Client: HeaderBackend<Pool::Block> + BlockchainEvents<Pool::Block> + Send + Sync + 'static,
+	Middleware: TransactionBroadcastMiddleware<TransactionStatus<TxHash<Pool>, BlockHash<Pool>>>
+		+ Send
+		+ Sync
+		+ 'static,
 {
 	fn broadcast(&self, bytes: Bytes) -> RpcResult<Option<String>> {
 		let pool = self.pool.clone();
@@ -261,6 +296,27 @@ fn is_pool_error_recoverable(err: &PoolError) -> bool {
 		}
 		_ => false
 	}
+}
+
+/// Middleware to gain insight into the transaction broadcast status.
+pub trait TransactionBroadcastMiddleware<TxStatus> {
+	/// Obtain the transaction status from the transaction pool.
+	fn on_transaction_status(&self, operation_id: &str, status: &TxStatus);
+
+	/// The `submit_and_watch` has returned an error.
+	fn on_pool_error(&self, operation_id: &str, error: &PoolError);
+
+	/// The broadcast future has terminated.
+	fn on_exit(&self, operation_id: &str);
+}
+
+/// The production unspecified middleware does nothing.
+impl<TxStatus> TransactionBroadcastMiddleware<TxStatus> for () {
+	fn on_transaction_status(&self, _operation_id: &str, _status: &TxStatus) {}
+
+	fn on_pool_error(&self, _operation_id: &str, _error: &PoolError) {}
+
+	fn on_exit(&self, _operation_id: &str) {}
 }
 
 #[cfg(test)]
