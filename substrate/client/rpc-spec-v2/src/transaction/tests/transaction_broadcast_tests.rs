@@ -16,10 +16,10 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use super::*;
 use crate::{
-	chain_head::test_utils::ChainHeadMockClient, hex_string,
-	transaction::TransactionBroadcast as RpcTransactionBroadcast,
+	chain_head::test_utils::ChainHeadMockClient,
+	hex_string,
+	transaction::{self, TransactionBroadcast as RpcTransactionBroadcast, *},
 };
 use assert_matches::assert_matches;
 use codec::Encode;
@@ -141,7 +141,7 @@ async fn tx_broadcast_invalid_tx() {
 		.await
 		.unwrap_err();
 	assert_matches!(err,
-		Error::Call(err) if err.code() == super::error::json_rpc_spec::INVALID_PARAM_ERROR && err.message() == "Invalid params"
+		Error::Call(err) if err.code() == transaction::error::json_rpc_spec::INVALID_PARAM_ERROR && err.message() == "Invalid params"
 	);
 
 	assert_eq!(0, pool.status().ready);
@@ -170,6 +170,6 @@ async fn tx_invalid_stop() {
 		.await
 		.unwrap_err();
 	assert_matches!(err,
-		Error::Call(err) if err.code() == super::error::json_rpc_spec::INVALID_PARAM_ERROR && err.message() == "Invalid operation id"
+		Error::Call(err) if err.code() == transaction::error::json_rpc_spec::INVALID_PARAM_ERROR && err.message() == "Invalid operation id"
 	);
 }
