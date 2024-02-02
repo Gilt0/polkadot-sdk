@@ -16,17 +16,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+use super::utils::*;
 use crate::{hex_string, transaction};
 use assert_matches::assert_matches;
 use codec::Encode;
 use jsonrpsee::{core::error::Error, rpc_params};
 use sc_transaction_pool_api::{ChainEvent, MaintainedTransactionPool, TransactionPool};
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use substrate_test_runtime_client::AccountKeyring::*;
 use substrate_test_runtime_transaction_pool::uxt;
 use tokio::sync::mpsc;
-
-use super::utils::*;
 
 /// Get the next event from the provided middleware in at most 60 seconds.
 macro_rules! get_next_event {
@@ -96,6 +95,78 @@ async fn tx_broadcast_enters_pool() {
 	// Ensure the future terminated properly.
 	let event = get_next_event!(&mut middleware);
 	assert_eq!(event, MiddlewareEvent::Exit { id: operation_id.clone(), is_aborted: true });
+}
+
+#[tokio::test]
+async fn tx_broadcast_stop_finished_broadcast() {
+	// This test is very similar to `tx_broadcast_enters_pool`
+	// However the last block is announced as finalized to force the
+	// broadcast future to exit before the `stop` is called.
+
+	let (api, pool, client_mock, tx_api, mut middleware) = setup_api();
+
+	// Start at block 1.
+	let block_1_header = api.push_block(1, vec![], true);
+
+	let uxt = uxt(Alice, ALICE_NONCE);
+	let xt = hex_string(&uxt.encode());
+
+	let operation_id: String =
+		tx_api.call("transaction_unstable_broadcast", rpc_params![&xt]).await.unwrap();
+
+	// Announce block 1 to `transaction_unstable_broadcast`.
+	client_mock.trigger_import_stream(block_1_header).await;
+
+	// Ensure the tx propagated from `transaction_unstable_broadcast` to the transaction pool.
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(
+		event,
+		MiddlewareEvent::TransactionStatus {
+			id: operation_id.clone(),
+			status: TxStatusTypeTest::Ready
+		}
+	);
+
+	assert_eq!(1, pool.status().ready);
+	assert_eq!(uxt.encode().len(), pool.status().ready_bytes);
+
+	// Import block 2 with the transaction included.
+	let block_2_header = api.push_block(2, vec![uxt.clone()], true);
+	let block_2 = block_2_header.hash();
+
+	// Announce block 2 to the pool.
+	let event = ChainEvent::Finalized { hash: block_2, tree_route: Arc::from(vec![]) };
+	pool.maintain(event).await;
+
+	assert_eq!(0, pool.status().ready);
+
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(
+		event,
+		MiddlewareEvent::TransactionStatus {
+			id: operation_id.clone(),
+			status: TxStatusTypeTest::InBlock((block_2, 0))
+		}
+	);
+
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(
+		event,
+		MiddlewareEvent::TransactionStatus {
+			id: operation_id.clone(),
+			status: TxStatusTypeTest::Finalized((block_2, 0))
+		}
+	);
+
+	// Ensure the broadcast future terminated properly.
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(event, MiddlewareEvent::Exit { id: operation_id.clone(), is_aborted: false });
+
+	// Call stop after the broadcast finished.
+	let _: () = tx_api
+		.call("transaction_unstable_stop", rpc_params![&operation_id])
+		.await
+		.unwrap();
 }
 
 #[tokio::test]
