@@ -22,7 +22,7 @@ use assert_matches::assert_matches;
 use codec::Encode;
 use jsonrpsee::{core::error::Error, rpc_params};
 use sc_transaction_pool_api::{ChainEvent, MaintainedTransactionPool, TransactionPool};
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 use substrate_test_runtime_client::AccountKeyring::*;
 use substrate_test_runtime_transaction_pool::uxt;
 use tokio::sync::mpsc;
@@ -35,6 +35,40 @@ macro_rules! get_next_event {
 			.unwrap()
 			.unwrap()
 	};
+}
+
+/// Collect N transaction status events from the provided middleware.
+macro_rules! collect_n_tx_events {
+	($middleware:expr, $num:expr) => {{
+		let mut events = HashMap::new();
+		for _ in 0..$num {
+			let event = get_next_event!($middleware);
+			match event {
+				MiddlewareEvent::TransactionStatus { id, status } => {
+					events.insert(id, status);
+				},
+				_ => panic!("Expected TransactionStatus"),
+			};
+		}
+		events
+	}};
+}
+
+/// Collect N future exit events from the provided middleware.
+macro_rules! collect_n_exit_events {
+	($middleware:expr, $num:expr) => {{
+		let mut events = HashMap::new();
+		for _ in 0..$num {
+			let event = get_next_event!($middleware);
+			match event {
+				MiddlewareEvent::Exit { id, is_aborted } => {
+					events.insert(id, is_aborted);
+				},
+				_ => panic!("Expected Exit"),
+			};
+		}
+		events
+	}};
 }
 
 #[tokio::test]
@@ -210,4 +244,90 @@ async fn tx_invalid_stop() {
 	assert_matches!(err,
 		Error::Call(err) if err.code() == transaction::error::json_rpc_spec::INVALID_PARAM_ERROR && err.message() == "Invalid operation id"
 	);
+}
+
+#[tokio::test]
+async fn tx_broadcast_resubmits_future_nonce_tx() {
+	let (api, pool, client_mock, tx_api, mut middleware) = setup_api();
+
+	// Start at block 1.
+	let block_1_header = api.push_block(1, vec![], true);
+	let block_1 = block_1_header.hash();
+
+	let current_uxt = uxt(Alice, ALICE_NONCE);
+	let current_xt = hex_string(&current_uxt.encode());
+	// This lives in the future.
+	let future_uxt = uxt(Alice, ALICE_NONCE + 1);
+	let future_xt = hex_string(&future_uxt.encode());
+
+	let future_operation_id: String = tx_api
+		.call("transaction_unstable_broadcast", rpc_params![&future_xt])
+		.await
+		.unwrap();
+
+	// Announce block 1 to `transaction_unstable_broadcast`.
+	client_mock.trigger_import_stream(block_1_header).await;
+
+	// Ensure the tx propagated from `transaction_unstable_broadcast` to the transaction pool.
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(
+		event,
+		MiddlewareEvent::TransactionStatus {
+			id: future_operation_id.clone(),
+			status: TxStatusTypeTest::Future
+		}
+	);
+
+	let event = ChainEvent::NewBestBlock { hash: block_1, tree_route: None };
+	pool.maintain(event).await;
+	assert_eq!(0, pool.status().ready);
+	// Ensure the tx is in the future.
+	assert_eq!(1, pool.status().future);
+
+	let block_2_header = api.push_block(2, vec![], true);
+	let block_2 = block_2_header.hash();
+
+	let operation_id: String = tx_api
+		.call("transaction_unstable_broadcast", rpc_params![&current_xt])
+		.await
+		.unwrap();
+
+	// Announce block 2 to `transaction_unstable_broadcast`.
+	client_mock.trigger_import_stream(block_2_header).await;
+
+	// Collect the events of both transactions.
+	let events = collect_n_tx_events!(&mut middleware, 2);
+	// Transactions entered the ready queue.
+	assert_eq!(events.get(&operation_id).unwrap(), &TxStatusTypeTest::Ready);
+	assert_eq!(events.get(&future_operation_id).unwrap(), &TxStatusTypeTest::Ready);
+
+	let event = ChainEvent::NewBestBlock { hash: block_2, tree_route: None };
+	pool.maintain(event).await;
+	assert_eq!(2, pool.status().ready);
+	assert_eq!(0, pool.status().future);
+
+	// Finalize transactions.
+	let block_3_header = api.push_block(3, vec![current_uxt, future_uxt], true);
+	let block_3 = block_3_header.hash();
+	client_mock.trigger_import_stream(block_3_header).await;
+
+	let event = ChainEvent::Finalized { hash: block_3, tree_route: Arc::from(vec![]) };
+	pool.maintain(event).await;
+	assert_eq!(0, pool.status().ready);
+	assert_eq!(0, pool.status().future);
+
+	let events = collect_n_tx_events!(&mut middleware, 2);
+	assert_eq!(events.get(&operation_id).unwrap(), &TxStatusTypeTest::InBlock((block_3, 0)));
+	assert_eq!(events.get(&future_operation_id).unwrap(), &TxStatusTypeTest::InBlock((block_3, 1)));
+
+	let events = collect_n_tx_events!(&mut middleware, 2);
+	assert_eq!(events.get(&operation_id).unwrap(), &TxStatusTypeTest::Finalized((block_3, 0)));
+	assert_eq!(
+		events.get(&future_operation_id).unwrap(),
+		&TxStatusTypeTest::Finalized((block_3, 1))
+	);
+
+	let events = collect_n_exit_events!(&mut middleware, 2);
+	assert_eq!(events.get(&operation_id).unwrap(), false);
+	assert_eq!(events.get(&future_operation_id).unwrap(), false);
 }

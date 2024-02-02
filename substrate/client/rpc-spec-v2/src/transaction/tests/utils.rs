@@ -24,7 +24,7 @@ use crate::{
 };
 use futures::Future;
 use jsonrpsee::RpcModule;
-use sc_transaction_pool::{BasicPool, *};
+use sc_transaction_pool::BasicPool;
 use sc_transaction_pool_api::error::Error as PoolError;
 use sp_core::{testing::TaskExecutor, H256};
 use sp_runtime::traits::Block as BlockT;
