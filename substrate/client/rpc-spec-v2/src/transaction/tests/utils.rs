@@ -16,17 +16,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use super::{
-	middleware::{MiddlewareEvent, TransactionMiddlware},
-	setup::Block,
-};
 use crate::{
 	chain_head::test_utils::ChainHeadMockClient,
 	transaction::{
 		TransactionBroadcast as RpcTransactionBroadcast, TransactionBroadcastMiddleware, *,
 	},
 };
-use futures::{channel::mpsc, Future};
+use futures::Future;
 use jsonrpsee::RpcModule;
 use sc_transaction_pool::{BasicPool, *};
 use sc_transaction_pool_api::error::Error as PoolError;
@@ -35,6 +31,7 @@ use sp_runtime::traits::Block as BlockT;
 use std::{pin::Pin, sync::Arc};
 use substrate_test_runtime_client::{prelude::*, Client};
 use substrate_test_runtime_transaction_pool::TestApi;
+use tokio::sync::mpsc;
 
 pub type Block = substrate_test_runtime_client::runtime::Block;
 
@@ -130,14 +127,14 @@ pub enum MiddlewareEvent {
 #[derive(Clone)]
 pub struct TransactionMiddlware {
 	/// Send the middleware events to the test.
-	send: mpsc::UnboundedSender<MiddlewareEvent>,
+	sender: mpsc::UnboundedSender<MiddlewareEvent>,
 }
 
 impl TransactionMiddlware {
 	/// Construct a new middleware and a receiver to capture the events.
 	pub fn new() -> (Self, mpsc::UnboundedReceiver<MiddlewareEvent>) {
-		let (send, recv) = mpsc::unbounded();
-		(TransactionMiddlware { send }, recv)
+		let (sender, recv) = mpsc::unbounded_channel();
+		(TransactionMiddlware { sender }, recv)
 	}
 }
 
@@ -149,8 +146,8 @@ impl TransactionBroadcastMiddleware<sc_transaction_pool_api::TransactionStatus<H
 		operation_id: &str,
 		status: &sc_transaction_pool_api::TransactionStatus<H256, H256>,
 	) {
-		self.send
-			.unbounded_send(MiddlewareEvent::TransactionStatus {
+		self.sender
+			.send(MiddlewareEvent::TransactionStatus {
 				id: operation_id.to_string(),
 				status: status.clone(),
 			})
@@ -158,8 +155,8 @@ impl TransactionBroadcastMiddleware<sc_transaction_pool_api::TransactionStatus<H
 	}
 
 	fn on_pool_error(&self, operation_id: &str, error: &PoolError) {
-		self.send
-			.unbounded_send(MiddlewareEvent::PoolError {
+		self.sender
+			.send(MiddlewareEvent::PoolError {
 				id: operation_id.to_string(),
 				err: error.to_string(),
 			})
@@ -169,7 +166,7 @@ impl TransactionBroadcastMiddleware<sc_transaction_pool_api::TransactionStatus<H
 	fn on_exit(&self, operation_id: &str, is_aborted: bool) {
 		// We might drop the test receiver before the broadcast future is done.
 		let _ = self
-			.send
-			.unbounded_send(MiddlewareEvent::Exit { id: operation_id.to_string(), is_aborted });
+			.sender
+			.send(MiddlewareEvent::Exit { id: operation_id.to_string(), is_aborted });
 	}
 }

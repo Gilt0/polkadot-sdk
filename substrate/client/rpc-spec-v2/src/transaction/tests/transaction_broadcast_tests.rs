@@ -86,11 +86,16 @@ async fn tx_broadcast_enters_pool() {
 		}
 	);
 
-	// Stop call can still be made.
+	// The future broadcast awaits for the finalized status to be reached.
+	// Force the future to exit by calling stop.
 	let _: () = tx_api
 		.call("transaction_unstable_stop", rpc_params![&operation_id])
 		.await
 		.unwrap();
+
+	// Ensure the future terminated properly.
+	let event = get_next_event!(&mut middleware);
+	assert_eq!(event, MiddlewareEvent::Exit { id: operation_id.clone(), is_aborted: true });
 }
 
 #[tokio::test]
