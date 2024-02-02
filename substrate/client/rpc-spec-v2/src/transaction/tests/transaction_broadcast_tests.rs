@@ -16,75 +16,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{
-	chain_head::test_utils::ChainHeadMockClient,
-	hex_string,
-	transaction::{self, TransactionBroadcast as RpcTransactionBroadcast, *},
-};
+use crate::{hex_string, transaction};
 use assert_matches::assert_matches;
 use codec::Encode;
-use futures::Future;
-use jsonrpsee::{core::error::Error, rpc_params, RpcModule};
-use sc_transaction_pool::*;
+use jsonrpsee::{core::error::Error, rpc_params};
 use sc_transaction_pool_api::{ChainEvent, MaintainedTransactionPool, TransactionPool};
-use sp_core::testing::TaskExecutor;
-use std::{pin::Pin, sync::Arc, time::Duration};
-use substrate_test_runtime_client::{prelude::*, AccountKeyring::*, Client};
-use substrate_test_runtime_transaction_pool::{uxt, TestApi};
+use std::time::Duration;
+use substrate_test_runtime_client::AccountKeyring::*;
+use substrate_test_runtime_transaction_pool::uxt;
 
-type Block = substrate_test_runtime_client::runtime::Block;
-
-/// Initial Alice account nonce.
-const ALICE_NONCE: u64 = 209;
-
-fn create_basic_pool_with_genesis(
-	test_api: Arc<TestApi>,
-) -> (BasicPool<TestApi, Block>, Pin<Box<dyn Future<Output = ()> + Send>>) {
-	let genesis_hash = {
-		test_api
-			.chain()
-			.read()
-			.block_by_number
-			.get(&0)
-			.map(|blocks| blocks[0].0.header.hash())
-			.expect("there is block 0. qed")
-	};
-	BasicPool::new_test(test_api, genesis_hash, genesis_hash)
-}
-
-fn maintained_pool() -> (BasicPool<TestApi, Block>, Arc<TestApi>, futures::executor::ThreadPool) {
-	let api = Arc::new(TestApi::with_alice_nonce(ALICE_NONCE));
-	let (pool, background_task) = create_basic_pool_with_genesis(api.clone());
-
-	let thread_pool = futures::executor::ThreadPool::new().unwrap();
-	thread_pool.spawn_ok(background_task);
-	(pool, api, thread_pool)
-}
-
-fn setup_api() -> (
-	Arc<TestApi>,
-	Arc<BasicPool<TestApi, Block>>,
-	Arc<ChainHeadMockClient<Client<Backend>>>,
-	RpcModule<
-		TransactionBroadcast<BasicPool<TestApi, Block>, ChainHeadMockClient<Client<Backend>>>,
-	>,
-) {
-	let (pool, api, _) = maintained_pool();
-	let pool = Arc::new(pool);
-
-	let builder = TestClientBuilder::new();
-	let client = Arc::new(builder.build());
-	let client_mock = Arc::new(ChainHeadMockClient::new(client.clone()));
-
-	let tx_api = RpcTransactionBroadcast::new(
-		client_mock.clone(),
-		pool.clone(),
-		Arc::new(TaskExecutor::default()),
-	)
-	.into_rpc();
-
-	(api, pool, client_mock, tx_api)
-}
+use super::utils::*;
 
 #[tokio::test]
 async fn tx_broadcast_enters_pool() {

@@ -16,8 +16,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-#[cfg(test)]
-pub mod utils;
+pub mod setup;
 
-#[cfg(test)]
-mod transaction_broadcast_tests;
+pub use setup::*;
