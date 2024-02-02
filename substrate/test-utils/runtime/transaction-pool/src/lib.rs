@@ -214,6 +214,14 @@ impl TestApi {
 		self.chain.write().invalid_hashes.insert(Self::hash_and_length_inner(xts).0);
 	}
 
+	/// Remove the transaction from the invalid hashes.
+	///
+	/// Next time the pool will try to validate this extrinsic,
+	/// it will return a valid result.
+	pub fn remove_invalid(&self, xts: &Extrinsic) {
+		self.chain.write().invalid_hashes.remove(&Self::hash_and_length_inner(xts).0);
+	}
+
 	/// Query validation requests received.
 	pub fn validation_requests(&self) -> Vec<Extrinsic> {
 		self.validation_requests.read().clone()
