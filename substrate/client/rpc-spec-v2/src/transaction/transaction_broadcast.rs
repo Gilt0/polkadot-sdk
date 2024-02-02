@@ -140,9 +140,13 @@ where
 {
 	fn broadcast(&self, bytes: Bytes) -> RpcResult<Option<String>> {
 		let pool = self.pool.clone();
+		let middleware = self.middleware.clone();
+		let drop_middleware = self.middleware.clone();
 
 		// The unique ID of this operation.
 		let id = self.generate_unique_id();
+		let operation_id = id.clone();
+		let drop_operation_id = id.clone();
 
 		let mut best_block_import_stream =
 			Box::pin(self.client.import_notification_stream().filter_map(
@@ -174,6 +178,9 @@ where
 					// The transaction was not included to the pool.
 					Err(e) => {
 						let Ok(pool_err) = e.into_pool_error() else { return };
+						if let Some(middleware) = &middleware {
+							middleware.on_pool_error(&operation_id, &pool_err);
+						}
 
 						if is_pool_error_recoverable(&pool_err) {
 							// Try to resubmit the transaction at a later block for recoverable
@@ -186,6 +193,10 @@ where
 				};
 
 				while let Some(event) = stream.next().await {
+					if let Some(middleware) = &middleware {
+						middleware.on_transaction_status(&operation_id, &event);
+					}
+
 					match event {
 						// The transaction propagation stops when:
 						// - The transaction was included in a finalized block via
@@ -230,7 +241,11 @@ where
 		let (fut, handle) = futures::future::abortable(broadcast_transaction_fut);
 		// The future expected by the executor must be `Future<Output = ()>` instead of
 		// `Future<Output = Result<(), Aborted>>`.
-		let fut = fut.map(drop);
+		let fut = fut.map(move |result| {
+			if let Some(middleware) = drop_middleware {
+				middleware.on_exit(&drop_operation_id, result.is_err());
+			}
+		});
 
 		// Keep track of this entry and the abortable handle.
 		{
@@ -307,7 +322,7 @@ pub trait TransactionBroadcastMiddleware<TxStatus> {
 	fn on_pool_error(&self, operation_id: &str, error: &PoolError);
 
 	/// The broadcast future has terminated.
-	fn on_exit(&self, operation_id: &str);
+	fn on_exit(&self, operation_id: &str, is_aborted: bool);
 }
 
 /// The production unspecified middleware does nothing.
@@ -316,7 +331,7 @@ impl<TxStatus> TransactionBroadcastMiddleware<TxStatus> for () {
 
 	fn on_pool_error(&self, _operation_id: &str, _error: &PoolError) {}
 
-	fn on_exit(&self, _operation_id: &str) {}
+	fn on_exit(&self, _operation_id: &str, _is_aborted: bool) {}
 }
 
 #[cfg(test)]
