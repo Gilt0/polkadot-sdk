@@ -45,7 +45,7 @@ use tokio::sync::mpsc;
 
 pub type Block = substrate_test_runtime_client::runtime::Block;
 
-pub type TxTestPool = BasicPool<TestApi, Block>;
+pub type TxTestPool = MiddlewarePool;
 pub type TxStatusType<Pool> = sc_transaction_pool_api::TransactionStatus<
 	sc_transaction_pool_api::TxHash<Pool>,
 	sc_transaction_pool_api::BlockHash<Pool>,
@@ -86,18 +86,20 @@ pub fn setup_api(
 	options: Options,
 ) -> (
 	Arc<TestApi>,
-	Arc<BasicPool<TestApi, Block>>,
+	Arc<MiddlewarePool>,
 	Arc<ChainHeadMockClient<Client<Backend>>>,
 	RpcModule<
 		TransactionBroadcast<
-			BasicPool<TestApi, Block>,
+			MiddlewarePool,
 			ChainHeadMockClient<Client<Backend>>,
 			TransactionMiddlware,
 		>,
 	>,
 	mpsc::UnboundedReceiver<MiddlewareEvent>,
+	mpsc::UnboundedReceiver<MiddlewarePoolEvent>,
 ) {
 	let (pool, api, _) = maintained_pool(options);
+	let (pool, pool_recv) = MiddlewarePool::new(Arc::new(pool).clone());
 	let pool = Arc::new(pool);
 
 	let builder = TestClientBuilder::new();
@@ -113,7 +115,7 @@ pub fn setup_api(
 	)
 	.into_rpc();
 
-	(api, pool, client_mock, tx_api, recv)
+	(api, pool, client_mock, tx_api, recv, pool_recv)
 }
 
 /// The type of the event that the middleware captures.
@@ -204,19 +206,19 @@ pub enum MiddlewarePoolEvent {
 /// Add a middleware to the transaction pool.
 ///
 /// This wraps the `submit_and_watch` to gain access to the events.
-struct MiddlewarePool {
-	pool: Arc<BasicPool<TestApi, Block>>,
+pub struct MiddlewarePool {
+	pub inner_pool: Arc<BasicPool<TestApi, Block>>,
 	/// Send the middleware events to the test.
 	sender: mpsc::UnboundedSender<MiddlewarePoolEvent>,
 }
 
 impl MiddlewarePool {
 	/// Construct a new [`MiddlewarePool`].
-	fn new(
+	pub fn new(
 		pool: Arc<BasicPool<TestApi, Block>>,
 	) -> (Self, mpsc::UnboundedReceiver<MiddlewarePoolEvent>) {
 		let (sender, recv) = mpsc::unbounded_channel();
-		(MiddlewarePool { pool, sender }, recv)
+		(MiddlewarePool { inner_pool: pool, sender }, recv)
 	}
 }
 
@@ -232,7 +234,7 @@ impl TransactionPool for MiddlewarePool {
 		source: TransactionSource,
 		xts: Vec<TransactionFor<Self>>,
 	) -> PoolFuture<Vec<Result<TxHash<Self>, Self::Error>>, Self::Error> {
-		self.pool.submit_at(at, source, xts)
+		self.inner_pool.submit_at(at, source, xts)
 	}
 
 	fn submit_one(
@@ -241,7 +243,7 @@ impl TransactionPool for MiddlewarePool {
 		source: TransactionSource,
 		xt: TransactionFor<Self>,
 	) -> PoolFuture<TxHash<Self>, Self::Error> {
-		self.pool.submit_one(at, source, xt)
+		self.inner_pool.submit_one(at, source, xt)
 	}
 
 	fn submit_and_watch(
@@ -250,7 +252,7 @@ impl TransactionPool for MiddlewarePool {
 		source: TransactionSource,
 		xt: TransactionFor<Self>,
 	) -> PoolFuture<Pin<Box<TransactionStatusStreamFor<Self>>>, Self::Error> {
-		let pool = self.pool.clone();
+		let pool = self.inner_pool.clone();
 		let sender = self.sender.clone();
 		let transaction = hex_string(&xt.encode());
 
@@ -284,27 +286,27 @@ impl TransactionPool for MiddlewarePool {
 	}
 
 	fn remove_invalid(&self, hashes: &[TxHash<Self>]) -> Vec<Arc<Self::InPoolTransaction>> {
-		self.pool.remove_invalid(hashes)
+		self.inner_pool.remove_invalid(hashes)
 	}
 
 	fn status(&self) -> PoolStatus {
-		self.pool.status()
+		self.inner_pool.status()
 	}
 
 	fn import_notification_stream(&self) -> ImportNotificationStream<TxHash<Self>> {
-		self.pool.import_notification_stream()
+		self.inner_pool.import_notification_stream()
 	}
 
 	fn hash_of(&self, xt: &TransactionFor<Self>) -> TxHash<Self> {
-		self.pool.hash_of(xt)
+		self.inner_pool.hash_of(xt)
 	}
 
 	fn on_broadcasted(&self, propagations: HashMap<TxHash<Self>, Vec<String>>) {
-		self.pool.on_broadcasted(propagations)
+		self.inner_pool.on_broadcasted(propagations)
 	}
 
 	fn ready_transaction(&self, hash: &TxHash<Self>) -> Option<Arc<Self::InPoolTransaction>> {
-		self.pool.ready_transaction(hash)
+		self.inner_pool.ready_transaction(hash)
 	}
 
 	fn ready_at(
@@ -317,14 +319,14 @@ impl TransactionPool for MiddlewarePool {
 				> + Send,
 		>,
 	> {
-		self.pool.ready_at(at)
+		self.inner_pool.ready_at(at)
 	}
 
 	fn ready(&self) -> Box<dyn ReadyTransactions<Item = Arc<Self::InPoolTransaction>> + Send> {
-		self.pool.ready()
+		self.inner_pool.ready()
 	}
 
 	fn futures(&self) -> Vec<Self::InPoolTransaction> {
-		self.pool.futures()
+		self.inner_pool.futures()
 	}
 }
