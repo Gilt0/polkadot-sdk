@@ -100,11 +100,11 @@ fn should_start_empty() {
 		assert_eq!(crate::NumberOfLeaves::<Test>::get(), 1);
 		assert_eq!(
 			crate::Nodes::<Test>::get(0),
-			Some(hex("4320435e8c3318562dba60116bdbcc0b82ffcecb9bb39aae3300cfda3ad0b8b0"))
+			Some(hex("f467378cd91be46c35c020eb389c851f5ff89656f27f6cb4bc6bf31a97bc15c5"))
 		);
 		assert_eq!(
 			crate::RootHash::<Test>::get(),
-			hex("4320435e8c3318562dba60116bdbcc0b82ffcecb9bb39aae3300cfda3ad0b8b0")
+			hex("f467378cd91be46c35c020eb389c851f5ff89656f27f6cb4bc6bf31a97bc15c5")
 		);
 		assert!(weight != Weight::zero());
 	});
@@ -128,9 +128,9 @@ fn should_append_to_mmr_when_on_initialize_is_called() {
 				crate::RootHash::<Test>::get(),
 			),
 			(
-				Some(hex("4320435e8c3318562dba60116bdbcc0b82ffcecb9bb39aae3300cfda3ad0b8b0")),
+				Some(hex("f467378cd91be46c35c020eb389c851f5ff89656f27f6cb4bc6bf31a97bc15c5")),
 				None,
-				hex("0x4320435e8c3318562dba60116bdbcc0b82ffcecb9bb39aae3300cfda3ad0b8b0"),
+				hex("0xf467378cd91be46c35c020eb389c851f5ff89656f27f6cb4bc6bf31a97bc15c5"),
 			)
 		);
 
@@ -153,9 +153,9 @@ fn should_append_to_mmr_when_on_initialize_is_called() {
 			(
 				None,
 				None,
-				Some(hex("672c04a9cd05a644789d769daa552d35d8de7c33129f8a7cbf49e595234c4854")),
+				Some(hex("58811a9effcb08da58c86b1d23e1e595863fcf2d2f3273d1afad6ed0a73f3913")),
 				None,
-				hex("672c04a9cd05a644789d769daa552d35d8de7c33129f8a7cbf49e595234c4854"),
+				hex("58811a9effcb08da58c86b1d23e1e595863fcf2d2f3273d1afad6ed0a73f3913"),
 			)
 		);
 
@@ -179,7 +179,7 @@ fn should_append_to_mmr_when_on_initialize_is_called() {
 	);
 
 	let expected = Some(mmr::Node::Hash(hex(
-		"672c04a9cd05a644789d769daa552d35d8de7c33129f8a7cbf49e595234c4854",
+		"58811a9effcb08da58c86b1d23e1e595863fcf2d2f3273d1afad6ed0a73f3913",
 	)));
 	assert_eq!(
 		offchain_db.get(&MMR::node_temp_offchain_key(2, parent_b2)).map(decode_node),
@@ -211,10 +211,10 @@ fn should_construct_larger_mmr_correctly() {
 				crate::RootHash::<Test>::get(),
 			),
 			(
-				Some(hex("ae88a0825da50e953e7a359c55fe13c8015e48d03d301b8bdfc9193874da9252")),
-				Some(hex("7e4316ae2ebf7c3b6821cb3a46ca8b7a4f9351a9b40fcf014bb0a4fd8e8f29da")),
-				Some(hex("611c2174c6164952a66d985cfe1ec1a623794393e3acff96b136d198f37a648c")),
-				hex("e45e25259f7930626431347fa4dd9aae7ac83b4966126d425ca70ab343709d2c"),
+				Some(hex("4e3fb711b8d82d2cc0a062f64c8b008781d514b2db5c4287ef4a5f30001798ad")),
+				Some(hex("8f6511e74ed817a685ddc0906a92e66696ac61ea601e121641cab4f751d9cf0b")),
+				Some(hex("01e19b7a77b40a1055b4f255ce2dc25eaeec01744379e2c750b67509a12b1995")),
+				hex("25a6a0750a3a20036edc2764253d742743499f61092cac84a07bf429c3bf114d"),
 			)
 		);
 	});
@@ -287,9 +287,9 @@ fn should_generate_proofs_correctly() {
 					leaf_indices: vec![0],
 					leaf_count: 7,
 					items: vec![
-						hex("ad4cbc033833612ccd4626d5f023b9dfc50a35e838514dd1f3c86f8506728705"),
-						hex("cb24f4614ad5b2a5430344c99545b421d9af83c46fd632d70a332200884b4d46"),
-						hex("dca421199bdcc55bb773c6b6967e8d16675de69062b52285ca63685241fdf626"),
+						hex("643edf8ea59ed2232c1696f2a02194944b4736e7ac42f53074543fde2e8587e0"),
+						hex("9ea4336f0498374120735bc6d18c9e1f3a6d6dd47c07b32420010b80e320664c"),
+						hex("03312a705c249aab61efce14a1782087030a168ba2a4cd848cb6c1c22369c6d9"),
 					],
 				}
 			)
@@ -318,9 +318,9 @@ fn should_generate_proofs_correctly() {
 					leaf_indices: vec![2],
 					leaf_count: 7,
 					items: vec![
-						hex("1b14c1dc7d3e4def11acdf31be0584f4b85c3673f1ff72a3af467b69a3b0d9d0"),
-						hex("672c04a9cd05a644789d769daa552d35d8de7c33129f8a7cbf49e595234c4854"),
-						hex("dca421199bdcc55bb773c6b6967e8d16675de69062b52285ca63685241fdf626"),
+						hex("3da35e025298c9416ee3ba66418c6fec29ac974ada8be89550b71fbabcc2b3ce"),
+						hex("58811a9effcb08da58c86b1d23e1e595863fcf2d2f3273d1afad6ed0a73f3913"),
+						hex("03312a705c249aab61efce14a1782087030a168ba2a4cd848cb6c1c22369c6d9"),
 					],
 				}
 			)
@@ -338,7 +338,7 @@ fn should_generate_proofs_correctly() {
 					leaf_indices: vec![2],
 					leaf_count: 3,
 					items: vec![hex(
-						"672c04a9cd05a644789d769daa552d35d8de7c33129f8a7cbf49e595234c4854"
+						"58811a9effcb08da58c86b1d23e1e595863fcf2d2f3273d1afad6ed0a73f3913"
 					)],
 				}
 			)
@@ -358,9 +358,9 @@ fn should_generate_proofs_correctly() {
 					leaf_indices: vec![2],
 					leaf_count: 5,
 					items: vec![
-						hex("1b14c1dc7d3e4def11acdf31be0584f4b85c3673f1ff72a3af467b69a3b0d9d0"),
-						hex("672c04a9cd05a644789d769daa552d35d8de7c33129f8a7cbf49e595234c4854"),
-						hex("3b031d22e24f1126c8f7d2f394b663f9b960ed7abbedb7152e17ce16112656d0")
+						hex("3da35e025298c9416ee3ba66418c6fec29ac974ada8be89550b71fbabcc2b3ce"),
+						hex("58811a9effcb08da58c86b1d23e1e595863fcf2d2f3273d1afad6ed0a73f3913"),
+						hex("f24de46b2ce3d772a16096d4914650f7e8f6f3a2bac7f02e20444a061ff9e13e")
 					],
 				}
 			)
@@ -376,9 +376,9 @@ fn should_generate_proofs_correctly() {
 					leaf_indices: vec![4],
 					leaf_count: 7,
 					items: vec![
-						hex("ae88a0825da50e953e7a359c55fe13c8015e48d03d301b8bdfc9193874da9252"),
-						hex("8ed25570209d8f753d02df07c1884ddb36a3d9d4770e4608b188322151c657fe"),
-						hex("611c2174c6164952a66d985cfe1ec1a623794393e3acff96b136d198f37a648c"),
+						hex("4e3fb711b8d82d2cc0a062f64c8b008781d514b2db5c4287ef4a5f30001798ad"),
+						hex("b34a69ddd99ca7ea708f65ee791a0cfb8f6c86402159471f873dcb2e905cba8c"),
+						hex("01e19b7a77b40a1055b4f255ce2dc25eaeec01744379e2c750b67509a12b1995"),
 					],
 				}
 			)
@@ -391,7 +391,7 @@ fn should_generate_proofs_correctly() {
 					leaf_indices: vec![4],
 					leaf_count: 5,
 					items: vec![hex(
-						"ae88a0825da50e953e7a359c55fe13c8015e48d03d301b8bdfc9193874da9252"
+						"4e3fb711b8d82d2cc0a062f64c8b008781d514b2db5c4287ef4a5f30001798ad"
 					),],
 				}
 			)
@@ -406,8 +406,8 @@ fn should_generate_proofs_correctly() {
 					leaf_indices: vec![6],
 					leaf_count: 7,
 					items: vec![
-						hex("ae88a0825da50e953e7a359c55fe13c8015e48d03d301b8bdfc9193874da9252"),
-						hex("7e4316ae2ebf7c3b6821cb3a46ca8b7a4f9351a9b40fcf014bb0a4fd8e8f29da"),
+						hex("4e3fb711b8d82d2cc0a062f64c8b008781d514b2db5c4287ef4a5f30001798ad"),
+						hex("8f6511e74ed817a685ddc0906a92e66696ac61ea601e121641cab4f751d9cf0b"),
 					],
 				}
 			)
@@ -438,9 +438,9 @@ fn should_generate_batch_proof_correctly() {
 				leaf_indices: vec![0, 4, 5],
 				leaf_count: 7,
 				items: vec![
-					hex("ad4cbc033833612ccd4626d5f023b9dfc50a35e838514dd1f3c86f8506728705"),
-					hex("cb24f4614ad5b2a5430344c99545b421d9af83c46fd632d70a332200884b4d46"),
-					hex("611c2174c6164952a66d985cfe1ec1a623794393e3acff96b136d198f37a648c"),
+					hex("643edf8ea59ed2232c1696f2a02194944b4736e7ac42f53074543fde2e8587e0"),
+					hex("9ea4336f0498374120735bc6d18c9e1f3a6d6dd47c07b32420010b80e320664c"),
+					hex("01e19b7a77b40a1055b4f255ce2dc25eaeec01744379e2c750b67509a12b1995"),
 				],
 			}
 		);
@@ -455,8 +455,8 @@ fn should_generate_batch_proof_correctly() {
 				leaf_indices: vec![0, 4, 5],
 				leaf_count: 6,
 				items: vec![
-					hex("ad4cbc033833612ccd4626d5f023b9dfc50a35e838514dd1f3c86f8506728705"),
-					hex("cb24f4614ad5b2a5430344c99545b421d9af83c46fd632d70a332200884b4d46"),
+					hex("643edf8ea59ed2232c1696f2a02194944b4736e7ac42f53074543fde2e8587e0"),
+					hex("9ea4336f0498374120735bc6d18c9e1f3a6d6dd47c07b32420010b80e320664c"),
 				],
 			}
 		);
